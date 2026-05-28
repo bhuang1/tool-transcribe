@@ -1,6 +1,9 @@
 # Set the path to your whisper.cpp directory and model file.
 export WHISPER_CPP_DIR="/Users/bettyhuang/myapps/whisper.cpp"
 export WHISPER_MODEL="ggml-large-v3-turbo-q8_0"
+export LLAMA_CLI="/opt/homebrew/bin/llama-completion"
+export LLAMA_MODEL_PATH="/Users/bettyhuang/llm_models/Qwen3.5-4B-UD-Q4_K_XL.gguf"
+export MLX_WHISPER_MODEL="/Users/bettyhuang/myapps/tool-transcribe/models/whisper-large-v3-turbo-8bit"
 # Whisper models:
 # tiny
 # tiny.en

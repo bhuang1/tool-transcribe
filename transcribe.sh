@@ -6,6 +6,10 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/env.sh"
 
 # --- Script ---
+# High-resolution clock (macOS bash 3.2 has no EPOCHREALTIME; perl is always present).
+now() { perl -MTime::HiRes=time -e 'printf "%.3f", time'; }
+SCRIPT_START=$(now)
+
 MODEL_PATH="$WHISPER_CPP_DIR/models/$WHISPER_MODEL.bin"
 echo "Model path: $MODEL_PATH"
 MAIN_EXECUTABLE="$WHISPER_CPP_DIR/build/bin/whisper-cli"
@@ -20,8 +24,24 @@ fi
 
 echo "🔴 Recording... Press ENTER to stop."
 
-# 1. Record a 16-bit WAV file, as required by whisper-cli.
-ffmpeg -f avfoundation -i ":0" -ar 16000 -ac 1 -c:a pcm_s16le "$TEMP_AUDIO_FILE" -y -loglevel quiet &
+# 1. Pick the best physical microphone (skip virtual devices like Zoom/Teams).
+AUDIO_DEVICE=$(ffmpeg -f avfoundation -list_devices true -i "" 2>&1 |
+  grep "audio devices" -A 99 |
+  grep -v "ZoomAudioDevice\|Microsoft Teams\|BlackHole\|Soundflower\|virtual\|AVFoundation audio devices" |
+  grep "\[" |
+  sed 's/.*\] //' |
+  head -1)
+
+if [ -z "$AUDIO_DEVICE" ]; then
+  echo "❌ Error: No physical microphone found."
+  exit 1
+fi
+
+echo "🎙️ Using: $AUDIO_DEVICE"
+
+# 2. Record a 16-bit WAV file, as required by whisper-cli.
+#    Use -nostdin so ffmpeg doesn't consume stdin (which conflicts with read).
+ffmpeg -nostdin -f avfoundation -i ":$AUDIO_DEVICE" -ar 16000 -ac 1 -c:a pcm_s16le "$TEMP_AUDIO_FILE" -y -loglevel quiet &
 FFMPEG_PID=$!
 
 # Wait for the user to press Enter
@@ -39,7 +59,10 @@ wait "$FFMPEG_PID"
 echo "🗣️ Transcribing with local Whisper model..."
 
 # 4. Transcribe the audio file and swallow all system logs.
+#    whisper-cli loads the model and runs inference in one shot, so this measures both.
+TRANSCRIBE_START=$(now)
 TRANSCRIPTION=$("$MAIN_EXECUTABLE" -m "$MODEL_PATH" -f "$TEMP_AUDIO_FILE" -nt 2>/dev/null)
+TRANSCRIBE_TIME=$(perl -e "printf '%.2f', $(now) - $TRANSCRIBE_START")
 
 # Optional: Strip the leading space whisper.cpp sometimes adds
 TRANSCRIPTION=$(echo "$TRANSCRIPTION" | xargs)
@@ -53,6 +76,9 @@ if [[ -n "$TRANSCRIPTION" ]]; then
 else
   echo "❌ Transcription failed. No text was generated."
 fi
+
+TOTAL_TIME=$(perl -e "printf '%.2f', $(now) - $SCRIPT_START")
+echo "⏱️  transcribe (load+inference) ${TRANSCRIBE_TIME}s | total ${TOTAL_TIME}s"
 
 # 6. Clean up the temporary audio file.
 rm "$TEMP_AUDIO_FILE"
