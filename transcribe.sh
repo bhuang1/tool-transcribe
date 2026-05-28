@@ -2,7 +2,8 @@
 
 # --- Configuration ---
 # Set the path to your whisper.cpp directory and model file.
-source env.sh
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/env.sh"
 
 # --- Script ---
 MODEL_PATH="$WHISPER_CPP_DIR/models/$WHISPER_MODEL.bin"
