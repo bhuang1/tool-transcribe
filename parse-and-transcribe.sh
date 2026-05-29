@@ -23,7 +23,8 @@ LOG_FILE="$SCRIPT_DIR/output-transcribe.log"
 
 # Always clean up the temp WAV, however we exit. (We only created it ourselves; an audio
 # file passed as an argument is never written to, since we transcode into TEMP_AUDIO_FILE.)
-trap 'rm -f "$TEMP_AUDIO_FILE"' EXIT
+PRESERVE_AUDIO=false
+trap 'if ! $PRESERVE_AUDIO; then rm -f "$TEMP_AUDIO_FILE"; fi' EXIT
 
 # --- Preflight: verify binaries and models exist before doing any work. ---
 if [ ! -f "$WHISPER_EXECUTABLE" ]; then
@@ -55,11 +56,17 @@ echo "LLM model:     $LLAMA_MODEL_PATH"
 
 # --- Step 1: Get the audio into TEMP_AUDIO_FILE (16kHz mono 16-bit WAV for whisper-cli). ---
 SAVE_MD=false
-while getopts "o" opt; do
+CASUAL_MODE=false
+while getopts "ocs" opt; do
   case $opt in
   o) SAVE_MD=true ;;
+  c) CASUAL_MODE=true ;;
+  s) PRESERVE_AUDIO=true ;;
   \?)
-    echo "Usage: $0 [-o] [audio-file]"
+    echo "Usage: $0 [-o] [-c] [-s] [audio-file]"
+    echo "  -o  Save cleaned transcript to a .md file"
+    echo "  -c  Casual mode: lowercase, no apostrophes, no periods"
+    echo "  -s  Preserve the temporary audio file (do not delete on exit)"
     exit 1
     ;;
   esac
@@ -132,14 +139,24 @@ fi
 # --- Step 3: Second pass — the LLM cleans up the transcript. ---
 echo "🧹 Cleaning up transcript with the local LLM..."
 
+# Build the bullet that differs between normal and casual mode.
+if $CASUAL_MODE; then
+  FORMAT_LINE="- Convert all text to lowercase. Remove all apostrophes (e.g., it's -> its, you're -> youre). Change 'I'm going' or 'I'm gonna' to 'imma'. Fix spacing."
+  PARAGRAPH_LINE=""
+else
+  FORMAT_LINE="- Fix punctuation, capitalization, and spacing."
+  PARAGRAPH_LINE="- Split into logical Markdown paragraphs."
+fi
+
 read -r -d '' CLEANUP_PROMPT <<EOF
 <|im_start|>system
 You are a strict text-formatting engine. Clean the following speech-to-text transcript by applying ONLY these mechanical edits:
 
 - Remove filler words (um, uh, ah, er, hmm, like, you know, I mean).
 - Fix stutters and repeated words (e.g., "I I think" -> "I think", "the the" -> "the").
-- Fix punctuation, capitalization, and spacing.
-- Split into logical Markdown paragraphs.
+${FORMAT_LINE}
+- Fix obvious misheard words based on context.
+${PARAGRAPH_LINE}
 
 STRICT RULES:
 1. Do NOT summarize, paraphrase, or reword. Keep the exact vocabulary.
@@ -184,6 +201,11 @@ CLEANUP_TIME=$(perl -e "printf '%.2f', $(now) - $CLEANUP_START")
 
 # Strip llama.cpp's string markers, ChatML tokens, and trim whitespace all in one pass.
 CLEANED=$(printf '%s' "$CLEANED" | perl -0pe 's/\[end of text\]//g; s/<\|im_end\|>//g; s/\A\s+//; s/\s+\z//')
+
+# Casual mode: strip trailing period from the final output.
+if $CASUAL_MODE; then
+  CLEANED=$(printf '%s' "$CLEANED" | perl -0pe 's/\.$//')
+fi
 
 # Resilience: never lose the user's words. If the LLM produced nothing, fall back to raw.
 if [[ -z "$CLEANED" ]]; then
